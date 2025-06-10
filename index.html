@@ -268,6 +268,42 @@
                 gap: 10px;
             }
         }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        body.dark-mode {
+            background: #181a1b;
+        }
+        body.dark-mode .container {
+            background: #23272f;
+            color: #eee;
+        }
+        body.dark-mode .header {
+            background: linear-gradient(135deg, #23272f 0%, #181a1b 100%);
+            color: #fff;
+        }
+        body.dark-mode input, body.dark-mode select, body.dark-mode button {
+            background: #23272f;
+            color: #eee;
+            border-color: #444;
+        }
+        body.dark-mode .task-item {
+            background: #23272f;
+            border-color: #333;
+        }
+        body.dark-mode .task-title.completed {
+            color: #aaa;
+        }
+        body.dark-mode .empty-state h3 {
+            color: #bbb;
+        }
+        body.dark-mode .add-btn {
+            background: linear-gradient(135deg, #23272f 0%, #181a1b 100%);
+            color: #fff;
+        }
     </style>
 </head>
 <body>
@@ -275,6 +311,10 @@
         <div class="header">
             <h1>Task Manager</h1>
             <p>Organize your tasks efficiently</p>
+            <button id="darkModeToggle" class="add-btn" style="position:absolute;top:30px;right:30px;min-width:unset;width:40px;height:40px;border-radius:50%;font-size:1.2rem;">🌙</button>
+            <div id="progressBarContainer" style="margin-top:20px;width:100%;background:#eee;border-radius:10px;overflow:hidden;">
+                <div id="progressBar" style="height:12px;width:0;background:linear-gradient(90deg,#667eea,#764ba2);transition:width 0.5s;"></div>
+            </div>
         </div>
 
         <div class="controls">
@@ -312,7 +352,17 @@
                     <button id="addTaskBtn" class="add-btn">Add Task</button>
                 </div>
             </div>
-
+            <div class="form-group">
+                <div style="flex:1;">
+                    <input type="text" id="searchInput" class="task-input" placeholder="Search tasks...">
+                </div>
+                <div>
+                    <button id="bulkCompleteBtn" class="add-btn" style="background:#28a745;">Complete Selected</button>
+                </div>
+                <div>
+                    <button id="bulkDeleteBtn" class="add-btn" style="background:#dc3545;">Delete Selected</button>
+                </div>
+            </div>
             <div class="filters">
                 <div class="filter-group">
                     <label for="statusFilter">Filter:</label>
@@ -352,13 +402,45 @@
         </div>
     </div>
 
+    <!-- Edit Task Modal -->
+    <div id="editModal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.4);z-index:1000;align-items:center;justify-content:center;">
+        <div style="background:white;padding:30px 40px;border-radius:16px;min-width:320px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.2);position:relative;">
+            <button id="closeEditModal" style="position:absolute;top:10px;right:10px;background:none;border:none;font-size:1.5rem;cursor:pointer;">&times;</button>
+            <h2>Edit Task</h2>
+            <div style="display:flex;flex-direction:column;gap:15px;margin-top:20px;">
+                <input type="text" id="editTaskInput" placeholder="Task description">
+                <input type="date" id="editDueDateInput">
+                <select id="editTaskType">
+                    <option value="home">Home</option>
+                    <option value="school">School</option>
+                    <option value="work">Work</option>
+                    <option value="project1">Project 1</option>
+                    <option value="project2">Project 2</option>
+                    <option value="personal">Personal</option>
+                    <option value="other">Other</option>
+                </select>
+                <select id="editTaskPriority">
+                    <option value="urgent">Urgent</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                </select>
+                <button id="saveEditBtn" class="add-btn">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         class TaskManager {
             constructor() {
                 this.tasks = [];
+                this.selectedTasks = new Set();
+                this.editingTaskId = null;
                 this.loadTasks();
                 this.bindEvents();
                 this.renderTasks();
+                this.updateProgressBar();
+                this.applyDarkMode(localStorage.getItem('darkMode') === 'true');
             }
 
             bindEvents() {
@@ -369,6 +451,12 @@
                 document.getElementById('statusFilter').addEventListener('change', () => this.renderTasks());
                 document.getElementById('typeFilter').addEventListener('change', () => this.renderTasks());
                 document.getElementById('sortBy').addEventListener('change', () => this.renderTasks());
+                document.getElementById('searchInput').addEventListener('input', () => this.renderTasks());
+                document.getElementById('bulkCompleteBtn').addEventListener('click', () => this.bulkComplete());
+                document.getElementById('bulkDeleteBtn').addEventListener('click', () => this.bulkDelete());
+                document.getElementById('darkModeToggle').addEventListener('click', () => this.toggleDarkMode());
+                document.getElementById('closeEditModal').addEventListener('click', () => this.closeEditModal());
+                document.getElementById('saveEditBtn').addEventListener('click', () => this.saveEditTask());
             }
 
             addTask() {
@@ -395,6 +483,8 @@
                 this.tasks.push(task);
                 this.saveTasks();
                 this.renderTasks();
+                this.updateProgressBar();
+                this.showNotification('Task added!');
 
                 // Clear form
                 taskInput.value = '';
@@ -409,6 +499,8 @@
                     task.completed = !task.completed;
                     this.saveTasks();
                     this.renderTasks();
+                    this.updateProgressBar();
+                    this.showNotification(task.completed ? 'Task completed!' : 'Task marked as pending.');
                 }
             }
 
@@ -417,27 +509,59 @@
                     this.tasks = this.tasks.filter(t => t.id !== id);
                     this.saveTasks();
                     this.renderTasks();
+                    this.updateProgressBar();
+                    this.showNotification('Task deleted!');
                 }
+            }
+
+            editTask(id) {
+                const task = this.tasks.find(t => t.id === id);
+                if (!task) return;
+                this.editingTaskId = id;
+                document.getElementById('editTaskInput').value = task.description;
+                document.getElementById('editDueDateInput').value = task.dueDate;
+                document.getElementById('editTaskType').value = task.type;
+                document.getElementById('editTaskPriority').value = task.priority;
+                document.getElementById('editModal').style.display = 'flex';
+            }
+
+            saveEditTask() {
+                const id = this.editingTaskId;
+                const task = this.tasks.find(t => t.id === id);
+                if (!task) return;
+                task.description = document.getElementById('editTaskInput').value.trim();
+                task.dueDate = document.getElementById('editDueDateInput').value;
+                task.type = document.getElementById('editTaskType').value;
+                task.priority = document.getElementById('editTaskPriority').value;
+                this.saveTasks();
+                this.renderTasks();
+                this.updateProgressBar();
+                this.closeEditModal();
+                this.showNotification('Task updated!');
+            }
+
+            closeEditModal() {
+                document.getElementById('editModal').style.display = 'none';
+                this.editingTaskId = null;
             }
 
             filterTasks() {
                 const statusFilter = document.getElementById('statusFilter').value;
                 const typeFilter = document.getElementById('typeFilter').value;
+                const search = document.getElementById('searchInput').value.trim().toLowerCase();
 
                 return this.tasks.filter(task => {
                     const statusMatch = statusFilter === 'all' || 
                                       (statusFilter === 'completed' && task.completed) ||
                                       (statusFilter === 'pending' && !task.completed);
-                    
                     const typeMatch = typeFilter === 'all' || task.type === typeFilter;
-
-                    return statusMatch && typeMatch;
+                    const searchMatch = !search || task.description.toLowerCase().includes(search);
+                    return statusMatch && typeMatch && searchMatch;
                 });
             }
 
             sortTasks(tasks) {
                 const sortBy = document.getElementById('sortBy').value;
-                
                 return tasks.sort((a, b) => {
                     switch (sortBy) {
                         case 'dueDate':
@@ -445,17 +569,13 @@
                             if (!a.dueDate) return 1;
                             if (!b.dueDate) return -1;
                             return new Date(a.dueDate) - new Date(b.dueDate);
-                        
                         case 'priority':
                             const priorityOrder = { urgent: 0, high: 1, medium: 2, low: 3 };
                             return priorityOrder[a.priority] - priorityOrder[b.priority];
-                        
                         case 'created':
                             return new Date(b.createdAt) - new Date(a.createdAt);
-                        
                         case 'type':
                             return a.type.localeCompare(b.type);
-                        
                         default:
                             return 0;
                     }
@@ -477,7 +597,7 @@
                 const tasksList = document.getElementById('tasksList');
                 const filteredTasks = this.filterTasks();
                 const sortedTasks = this.sortTasks(filteredTasks);
-
+                this.selectedTasks.clear();
                 if (sortedTasks.length === 0) {
                     tasksList.innerHTML = `
                         <div class="empty-state">
@@ -485,12 +605,13 @@
                             <p>Add a new task to get started!</p>
                         </div>
                     `;
+                    this.updateProgressBar();
                     return;
                 }
-
                 tasksList.innerHTML = sortedTasks.map(task => `
-                    <div class="task-item ${task.completed ? 'completed' : ''}">
+                    <div class="task-item ${task.completed ? 'completed' : ''}" style="animation:fadeIn 0.5s;">
                         <div class="task-header">
+                            <input type="checkbox" class="select-task" data-id="${task.id}" style="margin-right:10px;">
                             <div class="task-title ${task.completed ? 'completed' : ''}">
                                 ${task.description}
                             </div>
@@ -498,6 +619,7 @@
                                 <button class="task-btn complete-btn" onclick="taskManager.toggleTask(${task.id})">
                                     ${task.completed ? 'Undo' : 'Complete'}
                                 </button>
+                                <button class="task-btn" style="background:#ffc107;color:#333" onclick="taskManager.editTask(${task.id})">Edit</button>
                                 <button class="task-btn delete-btn" onclick="taskManager.deleteTask(${task.id})">
                                     Delete
                                 </button>
@@ -515,21 +637,133 @@
                         </div>
                     </div>
                 `).join('');
+                // Checkbox event listeners
+                document.querySelectorAll('.select-task').forEach(cb => {
+                    cb.addEventListener('change', (e) => {
+                        const id = Number(e.target.getAttribute('data-id'));
+                        if (e.target.checked) this.selectedTasks.add(id);
+                        else this.selectedTasks.delete(id);
+                    });
+                });
+                this.updateProgressBar();
+            }
+
+            bulkComplete() {
+                if (this.selectedTasks.size === 0) return;
+                this.tasks.forEach(task => {
+                    if (this.selectedTasks.has(task.id)) task.completed = true;
+                });
+                this.saveTasks();
+                this.renderTasks();
+                this.updateProgressBar();
+                this.showNotification('Selected tasks marked as complete!');
+            }
+
+            bulkDelete() {
+                if (this.selectedTasks.size === 0) return;
+                if (!confirm('Delete all selected tasks?')) return;
+                this.tasks = this.tasks.filter(task => !this.selectedTasks.has(task.id));
+                this.saveTasks();
+                this.renderTasks();
+                this.updateProgressBar();
+                this.showNotification('Selected tasks deleted!');
+            }
+
+            updateProgressBar() {
+                const bar = document.getElementById('progressBar');
+                const total = this.tasks.length;
+                const completed = this.tasks.filter(t => t.completed).length;
+                const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
+                bar.style.width = percent + '%';
+                bar.title = percent + '% completed';
+            }
+
+            showNotification(msg) {
+                let n = document.createElement('div');
+                n.textContent = msg;
+                n.style.position = 'fixed';
+                n.style.bottom = '30px';
+                n.style.right = '30px';
+                n.style.background = 'linear-gradient(135deg,#667eea,#764ba2)';
+                n.style.color = 'white';
+                n.style.padding = '16px 28px';
+                n.style.borderRadius = '10px';
+                n.style.fontWeight = '600';
+                n.style.boxShadow = '0 4px 16px rgba(0,0,0,0.15)';
+                n.style.zIndex = 9999;
+                n.style.opacity = 0;
+                n.style.transition = 'opacity 0.3s';
+                document.body.appendChild(n);
+                setTimeout(() => n.style.opacity = 1, 10);
+                setTimeout(() => { n.style.opacity = 0; setTimeout(()=>n.remove(), 300); }, 2000);
+            }
+
+            toggleDarkMode() {
+                const isDark = document.body.classList.toggle('dark-mode');
+                localStorage.setItem('darkMode', isDark);
+                this.applyDarkMode(isDark);
+            }
+
+            applyDarkMode(isDark) {
+                if (isDark) {
+                    document.body.classList.add('dark-mode');
+                } else {
+                    document.body.classList.remove('dark-mode');
+                }
             }
 
             saveTasks() {
-                // In your own environment, uncomment the next line to use localStorage:
-                // localStorage.setItem('tasks', JSON.stringify(this.tasks));
+                localStorage.setItem('tasks', JSON.stringify(this.tasks));
             }
 
             loadTasks() {
-                // In your own environment, uncomment the next lines to use localStorage:
-                // const saved = localStorage.getItem('tasks');
-                // if (saved) {
-                //     this.tasks = JSON.parse(saved);
-                // }
+                const saved = localStorage.getItem('tasks');
+                if (saved) {
+                    this.tasks = JSON.parse(saved);
+                }
             }
         }
+
+        // Add dark mode CSS
+        const darkModeStyle = document.createElement('style');
+        darkModeStyle.innerHTML = `
+        body.dark-mode {
+            background: #181a1b;
+        }
+        body.dark-mode .container {
+            background: #23272f;
+            color: #eee;
+        }
+        body.dark-mode .header {
+            background: linear-gradient(135deg, #23272f 0%, #181a1b 100%);
+            color: #fff;
+        }
+        body.dark-mode input, body.dark-mode select, body.dark-mode button {
+            background: #23272f;
+            color: #eee;
+            border-color: #444;
+        }
+        body.dark-mode .task-item {
+            background: #23272f;
+            border-color: #333;
+        }
+        body.dark-mode .task-title.completed {
+            color: #aaa;
+        }
+        body.dark-mode .empty-state h3 {
+            color: #bbb;
+        }
+        body.dark-mode .add-btn {
+            background: linear-gradient(135deg, #23272f 0%, #181a1b 100%);
+            color: #fff;
+        }
+        `;
+        document.head.appendChild(darkModeStyle);
+
+        // Add fadeIn animation
+        const animStyle = document.createElement('style');
+        animStyle.innerHTML = `@keyframes fadeIn { from { opacity:0; transform:translateY(10px);} to { opacity:1; transform:translateY(0);} }`;
+        document.head.appendChild(animStyle);
 
         // Initialize the task manager
         const taskManager = new TaskManager();
